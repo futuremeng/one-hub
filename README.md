@@ -74,6 +74,13 @@ _本项目是基于[one-api](https://github.com/songquanpeng/one-api)二次开�
 
 请查看[文档](https://github.com/MartialBE/one-hub/wiki)
 
+## 快速启动
+
+1. cp .env.example .env
+2. docker-compose up -d
+3. 等待mysql启动完毕，docker start one-hub-portal，因one-hub-portal默认只尝试3次，而最初尝试时mysql尚未初始化完成。
+4. 打开http://localhost:3000，用root/123456登录，打开http://localhost:3000/panel/profile 修改密码。
+
 ## 当前支持的供应商
 
 | 供应商                                                                | Chat                     | Embeddings | Audio  | Images      | 其他                                                             |

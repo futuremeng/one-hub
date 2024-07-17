@@ -70,6 +70,13 @@ If you find that a new model is missing, please update the newly added model in 
 
 Please refer to the [documentation](https://github.com/MartialBE/one-hub/wiki).
 
+## Express Start
+
+1. ```cp .env.example .env```
+2. ```docker-compose up -d```
+3. Wait until mysqld is ready for connections, run ```docker start one-hub-portal```，because one-hub-portal only retries 3 before mysql is ready.
+4. Open[http://localhost:3000](http://localhost:3000), login by root:123456. Open[http://localhost:3000/panel/profile](http://localhost:3000/panel/profile) to change password。
+
 ## Current Supported Providers
 
 | Provider                                                              | Chat                             | Embeddings | Audio  | Images   | Other                                                            |

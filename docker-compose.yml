@@ -5,7 +5,6 @@ services:
     image: martialbe/one-api:latest
     container_name: one-hub-portal
     restart: always
-    command: --log-dir /app/logs
     ports:
       - "${ONE_HUB_PORT}:3000"
     volumes:
@@ -15,7 +14,9 @@ services:
       - SQL_DSN=${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(db:3306)/${MYSQL_DATABASE} # 修改此行，或注释掉以使用 SQLite 作为数据库
       - REDIS_CONN_STRING=redis://redis
       - SESSION_SECRET=random_string # 修改为随机字符串
+      - USER_TOKEN_SECRET=random_string # 修改为随机字符串,32位以上
       - TZ=Asia/Shanghai
+      # - HASHIDS_SALT=random_string # 可空，建议设置，字符串元素不能重复
     #      - NODE_TYPE=slave  # 多机部署时从节点取消注释该行
     #      - SYNC_FREQUENCY=60  # 需要定期从数据库加载数据时取消注释该行
     #      - FRONTEND_BASE_URL=https://openai.justsong.cn  # 多机部署时从节点取消注释该行

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"one-api/common/config"
 
 	"github.com/shopspring/decimal"
@@ -8,11 +9,13 @@ import (
 )
 
 const (
-	TokensPriceType = "tokens"
-	TimesPriceType  = "times"
-	DefaultPrice    = 30.0
-	DollarRate      = 0.002
-	RMBRate         = 0.014
+	TokensPriceType    = "tokens"
+	TimesPriceType     = "times"
+	DefaultPrice       = 30.0
+	DollarRate         = 0.002
+	RMBRate            = 0.014
+	DefaultCacheRatios = 0.5
+	DefaultAudioRatio  = 40
 )
 
 type Price struct {
@@ -21,6 +24,8 @@ type Price struct {
 	ChannelType int     `json:"channel_type" gorm:"default:0" binding:"gte=0"`
 	Input       float64 `json:"input" gorm:"default:0" binding:"gte=0"`
 	Output      float64 `json:"output" gorm:"default:0" binding:"gte=0"`
+
+	ExtraRatios map[string]float64 `json:"extra_ratios,omitempty" gorm:"-"`
 }
 
 func GetAllPrices() ([]*Price, error) {
@@ -28,6 +33,23 @@ func GetAllPrices() ([]*Price, error) {
 	if err := DB.Find(&prices).Error; err != nil {
 		return nil, err
 	}
+
+	if config.AudioTokenJson == "" {
+		return prices, nil
+	}
+
+	audioToken := make(map[string]map[string]float64)
+	err := json.Unmarshal([]byte(config.AudioTokenJson), &audioToken)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, price := range prices {
+		if ratio, ok := audioToken[price.Model]; ok {
+			price.ExtraRatios = ratio
+		}
+	}
+
 	return prices, nil
 }
 
@@ -60,6 +82,23 @@ func (price *Price) GetOutput() float64 {
 	}
 
 	return price.Output
+}
+
+func (price *Price) GetExtraRatio(key string) float64 {
+	if key == "cached_tokens_ratio" {
+		return DefaultCacheRatios
+	}
+
+	// 目前只有 音频，如果为空说明有问题，返回最大的一个倍率
+	if price.ExtraRatios == nil {
+		return DefaultAudioRatio
+	}
+
+	if ratio, ok := price.ExtraRatios[key]; ok {
+		return ratio
+	}
+
+	return DefaultAudioRatio
 }
 
 func (price *Price) FetchInputCurrencyPrice(rate float64) string {
@@ -349,7 +388,42 @@ func GetDefaultPrice() []*Price {
 		"mj_custom_zoom":    0,
 		"mj_describe":       25,
 		"mj_upscale":        25,
-		"swap_face":         25,
+		"mj_swap_face":      25,
+		"mj_upload":         0,
+
+		"mj_turbo_imagine":        50,
+		"mj_turbo_variation":      50,
+		"mj_turbo_reroll":         50,
+		"mj_turbo_blend":          50,
+		"mj_turbo_modal":          50,
+		"mj_turbo_zoom":           50,
+		"mj_turbo_shorten":        50,
+		"mj_turbo_high_variation": 50,
+		"mj_turbo_low_variation":  50,
+		"mj_turbo_pan":            50,
+		"mj_turbo_inpaint":        0,
+		"mj_turbo_custom_zoom":    0,
+		"mj_turbo_describe":       25,
+		"mj_turbo_upscale":        25,
+		"mj_turbo_swap_face":      25,
+		"mj_turbo_upload":         0,
+
+		"mj_relax_imagine":        50,
+		"mj_relax_variation":      50,
+		"mj_relax_reroll":         50,
+		"mj_relax_blend":          50,
+		"mj_relax_modal":          50,
+		"mj_relax_zoom":           50,
+		"mj_relax_shorten":        50,
+		"mj_relax_high_variation": 50,
+		"mj_relax_low_variation":  50,
+		"mj_relax_pan":            50,
+		"mj_relax_inpaint":        0,
+		"mj_relax_custom_zoom":    0,
+		"mj_relax_describe":       25,
+		"mj_relax_upscale":        25,
+		"mj_relax_swap_face":      25,
+		"mj_relax_upload":         0,
 	}
 
 	for model, mjPrice := range DefaultMJPrice {
@@ -378,4 +452,14 @@ func GetDefaultPrice() []*Price {
 	}
 
 	return prices
+}
+
+func GetDefaultAudioRatio() string {
+	if config.AudioTokenJson != "" {
+		return config.AudioTokenJson
+	}
+
+	config.AudioTokenJson = `{"gpt-4o-audio-preview":{"input_audio_tokens_ratio":40,"output_audio_tokens_ratio":20},"gpt-4o-audio-preview-2024-10-01":{"input_audio_tokens_ratio":40,"output_audio_tokens_ratio":20},"gpt-4o-audio-preview-2024-12-17":{"input_audio_tokens_ratio":16,"output_audio_tokens_ratio":8},"gpt-4o-mini-audio-preview":{"input_audio_tokens_ratio":67,"output_audio_tokens_ratio":34},"gpt-4o-mini-audio-preview-2024-12-17":{"input_audio_tokens_ratio":67,"output_audio_tokens_ratio":34},"gpt-4o-realtime-preview":{"input_audio_tokens_ratio":20,"output_audio_tokens_ratio":10},"gpt-4o-realtime-preview-2024-10-01":{"input_audio_tokens_ratio":20,"output_audio_tokens_ratio":10},"gpt-4o-realtime-preview-2024-12-17":{"input_audio_tokens_ratio":8,"output_audio_tokens_ratio":4},"gpt-4o-mini-realtime-preview":{"input_audio_tokens_ratio":17,"output_audio_tokens_ratio":8.4},"gpt-4o-mini-realtime-preview-2024-12-17":{"input_audio_tokens_ratio":17,"output_audio_tokens_ratio":8.4}}`
+
+	return config.AudioTokenJson
 }

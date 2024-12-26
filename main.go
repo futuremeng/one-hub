@@ -9,6 +9,7 @@ import (
 	"one-api/common/config"
 	"one-api/common/logger"
 	"one-api/common/notify"
+	"one-api/common/oidc"
 	"one-api/common/redis"
 	"one-api/common/requester"
 	"one-api/common/storage"
@@ -17,7 +18,6 @@ import (
 	"one-api/cron"
 	"one-api/middleware"
 	"one-api/model"
-	"one-api/relay/relay_util"
 	"one-api/relay/task"
 	"one-api/router"
 	"time"
@@ -37,8 +37,19 @@ var indexPage []byte
 func main() {
 	cli.InitCli()
 	config.InitConf()
+	if viper.GetString("log_level") == "debug" {
+		config.Debug = true
+	}
+
 	logger.SetupLogger()
 	logger.SysLog("One Hub " + config.Version + " started")
+
+	// Initialize user token
+	err := common.InitUserToken()
+	if err != nil {
+		logger.FatalLog("failed to initialize user token: " + err.Error())
+	}
+
 	// Initialize SQL Database
 	model.SetupDB()
 	defer model.CloseDB()
@@ -47,7 +58,11 @@ func main() {
 	cache.InitCacheManager()
 	// Initialize options
 	model.InitOptionMap()
-	relay_util.NewPricing()
+	// Initialize oidc
+	oidc.InitOIDCConfig()
+	model.NewPricing()
+	model.HandleOldTokenMaxId()
+
 	initMemoryCache()
 	initSync()
 
@@ -98,6 +113,11 @@ func initHttpServer() {
 	server.Use(middleware.RequestId())
 	middleware.SetUpLogger(server)
 
+	trustedHeader := viper.GetString("trusted_header")
+	if trustedHeader != "" {
+		server.TrustedPlatform = trustedHeader
+	}
+
 	store := cookie.NewStore([]byte(config.SessionSecret))
 	server.Use(sessions.Sessions("session", store))
 
@@ -120,6 +140,6 @@ func SyncChannelCache(frequency int) {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		logger.SysLog("syncing channels from database")
 		model.ChannelGroup.Load()
-		relay_util.PricingInstance.Init()
+		model.PricingInstance.Init()
 	}
 }

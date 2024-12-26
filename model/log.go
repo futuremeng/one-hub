@@ -7,6 +7,7 @@ import (
 	"one-api/common/logger"
 	"one-api/common/utils"
 
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -24,6 +25,9 @@ type Log struct {
 	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
 	ChannelId        int    `json:"channel_id" gorm:"index"`
 	RequestTime      int    `json:"request_time" gorm:"default:0"`
+	IsStream         bool   `json:"is_stream" gorm:"default:false"`
+
+	Metadata datatypes.JSONType[map[string]any] `json:"metadata" gorm:"type:json"`
 
 	Channel *Channel `json:"channel" gorm:"foreignKey:Id;references:ChannelId"`
 }
@@ -40,9 +44,11 @@ func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !config.LogConsumeEnabled {
 		return
 	}
+	username, _ := CacheGetUsername(userId)
+
 	log := &Log{
 		UserId:    userId,
-		Username:  GetUsernameById(userId),
+		Username:  username,
 		CreatedAt: utils.GetTimestamp(),
 		Type:      logType,
 		Content:   content,
@@ -53,14 +59,29 @@ func RecordLog(userId int, logType int, content string) {
 	}
 }
 
-func RecordConsumeLog(ctx context.Context, userId int, channelId int, promptTokens int, completionTokens int, modelName string, tokenName string, quota int, content string, requestTime int) {
+func RecordConsumeLog(
+	ctx context.Context,
+	userId int,
+	channelId int,
+	promptTokens int,
+	completionTokens int,
+	modelName string,
+	tokenName string,
+	quota int,
+	content string,
+	requestTime int,
+	isStream bool,
+	metadata map[string]any) {
 	logger.LogInfo(ctx, fmt.Sprintf("record consume log: userId=%d, channelId=%d, promptTokens=%d, completionTokens=%d, modelName=%s, tokenName=%s, quota=%d, content=%s", userId, channelId, promptTokens, completionTokens, modelName, tokenName, quota, content))
 	if !config.LogConsumeEnabled {
 		return
 	}
+
+	username, _ := CacheGetUsername(userId)
+
 	log := &Log{
 		UserId:           userId,
-		Username:         GetUsernameById(userId),
+		Username:         username,
 		CreatedAt:        utils.GetTimestamp(),
 		Type:             LogTypeConsume,
 		Content:          content,
@@ -71,7 +92,13 @@ func RecordConsumeLog(ctx context.Context, userId int, channelId int, promptToke
 		Quota:            quota,
 		ChannelId:        channelId,
 		RequestTime:      requestTime,
+		IsStream:         isStream,
 	}
+
+	if metadata != nil {
+		log.Metadata = datatypes.NewJSONType(metadata)
+	}
+
 	err := DB.Create(log).Error
 	if err != nil {
 		logger.LogError(ctx, "failed to record log: "+err.Error())
@@ -190,7 +217,7 @@ func SumUsedQuota(startTimestamp int64, endTimestamp int64, modelName string, us
 }
 
 func DeleteOldLog(targetTimestamp int64) (int64, error) {
-	result := DB.Where("created_at < ?", targetTimestamp).Delete(&Log{})
+	result := DB.Where("type = ? AND created_at < ?", LogTypeConsume, targetTimestamp).Delete(&Log{})
 	return result.RowsAffected, result.Error
 }
 
@@ -208,49 +235,7 @@ type LogStatisticGroupModel struct {
 	ModelName string `gorm:"column:model_name"`
 }
 
-func GetUserModelExpensesByPeriod(userId, startTimestamp, endTimestamp int) (LogStatistic []*LogStatisticGroupModel, err error) {
-	groupSelect := getTimestampGroupsSelect("created_at", "day", "date")
-
-	err = DB.Raw(`
-		SELECT `+groupSelect+`,
-		model_name, count(1) as request_count,
-		sum(quota) as quota,
-		sum(prompt_tokens) as prompt_tokens,
-		sum(completion_tokens) as completion_tokens
-		FROM logs
-		WHERE type=2
-		AND user_id= ?
-		AND created_at BETWEEN ? AND ?
-		GROUP BY date, model_name
-		ORDER BY date, model_name
-	`, userId, startTimestamp, endTimestamp).Scan(&LogStatistic).Error
-
-	return
-}
-
 type LogStatisticGroupChannel struct {
 	LogStatistic
 	Channel string `gorm:"column:channel"`
-}
-
-func GetChannelExpensesByPeriod(startTimestamp, endTimestamp int64) (LogStatistics []*LogStatisticGroupChannel, err error) {
-	groupSelect := getTimestampGroupsSelect("created_at", "day", "date")
-
-	err = DB.Raw(`
-		SELECT `+groupSelect+`,
-		count(1) as request_count,
-		sum(quota) as quota,
-		sum(prompt_tokens) as prompt_tokens,
-		sum(completion_tokens) as completion_tokens,
-		sum(request_time) as request_time,
-		channels.name as channel
-		FROM logs
-		JOIN channels ON logs.channel_id = channels.id
-		WHERE logs.type=2
-		AND logs.created_at BETWEEN ? AND ?
-		GROUP BY date, channels.id
-		ORDER BY date, channels.id
-	`, startTimestamp, endTimestamp).Scan(&LogStatistics).Error
-
-	return LogStatistics, err
 }

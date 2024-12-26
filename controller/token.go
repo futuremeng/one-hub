@@ -62,15 +62,14 @@ func GetPlaygroundToken(c *gin.Context) {
 	token, err := model.GetTokenByName(tokenName, userId)
 	if err != nil {
 		cleanToken := model.Token{
-			UserId:         userId,
-			Name:           tokenName,
-			Key:            utils.GenerateKey(),
+			UserId: userId,
+			Name:   tokenName,
+			// Key:            utils.GenerateKey(),
 			CreatedTime:    utils.GetTimestamp(),
 			AccessedTime:   utils.GetTimestamp(),
 			ExpiredTime:    0,
 			RemainQuota:    0,
 			UnlimitedQuota: true,
-			ChatCache:      false,
 		}
 		err = cleanToken.Insert()
 		if err != nil {
@@ -107,16 +106,25 @@ func AddToken(c *gin.Context) {
 		})
 		return
 	}
+
+	if token.Group != "" && model.GlobalUserGroupRatio.GetBySymbol(token.Group) == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "分组不存在",
+		})
+		return
+	}
+
 	cleanToken := model.Token{
-		UserId:         c.GetInt("id"),
-		Name:           token.Name,
-		Key:            utils.GenerateKey(),
+		UserId: c.GetInt("id"),
+		Name:   token.Name,
+		// Key:            utils.GenerateKey(),
 		CreatedTime:    utils.GetTimestamp(),
 		AccessedTime:   utils.GetTimestamp(),
 		ExpiredTime:    token.ExpiredTime,
 		RemainQuota:    token.RemainQuota,
 		UnlimitedQuota: token.UnlimitedQuota,
-		ChatCache:      token.ChatCache,
+		Group:          token.Group,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -192,6 +200,15 @@ func UpdateToken(c *gin.Context) {
 			return
 		}
 	}
+
+	if cleanToken.Group != token.Group && token.Group != "" && model.GlobalUserGroupRatio.GetBySymbol(token.Group) == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "分组不存在",
+		})
+		return
+	}
+
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
@@ -200,7 +217,7 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ExpiredTime = token.ExpiredTime
 		cleanToken.RemainQuota = token.RemainQuota
 		cleanToken.UnlimitedQuota = token.UnlimitedQuota
-		cleanToken.ChatCache = token.ChatCache
+		cleanToken.Group = token.Group
 	}
 	err = cleanToken.Update()
 	if err != nil {

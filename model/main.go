@@ -25,7 +25,9 @@ func SetupDB() {
 		logger.FatalLog("failed to initialize database: " + err.Error())
 	}
 	ChannelGroup.Load()
+	GlobalUserGroupRatio.Load()
 	config.RootUserEmail = GetRootUserEmail()
+	NewModelOwnedBys()
 
 	if viper.GetBool("batch_update_enabled") {
 		config.BatchUpdateEnabled = true
@@ -90,7 +92,7 @@ func chooseDB() (*gorm.DB, error) {
 func InitDB() (err error) {
 	db, err := chooseDB()
 	if err == nil {
-		if viper.GetBool("debug") {
+		if config.Debug {
 			db = db.Debug()
 		}
 		DB = db
@@ -108,7 +110,7 @@ func InitDB() (err error) {
 		}
 		logger.SysLog("database migration started")
 
-		migration(DB)
+		migrationBefore(DB)
 
 		err = db.AutoMigrate(&Channel{})
 		if err != nil {
@@ -150,10 +152,7 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
-		err = db.AutoMigrate(&ChatCache{})
-		if err != nil {
-			return err
-		}
+
 		err = db.AutoMigrate(&Payment{})
 		if err != nil {
 			return err
@@ -166,6 +165,23 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = db.AutoMigrate(&Statistics{})
+		if err != nil {
+			return err
+		}
+
+		err = db.AutoMigrate(&UserGroup{})
+		if err != nil {
+			return err
+		}
+
+		err = db.AutoMigrate(&ModelOwnedBy{})
+		if err != nil {
+			return err
+		}
+
+		migrationAfter(DB)
+
 		logger.SysLog("database migrated")
 		err = createRootAccountIfNeed()
 		return err

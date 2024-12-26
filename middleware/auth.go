@@ -66,6 +66,30 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Next()
 }
 
+func TrySetUserBySession() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		session := sessions.Default(c)
+		id := session.Get("id")
+		if id == nil {
+			c.Next()
+			return
+		}
+
+		idInt, ok := id.(int)
+		if !ok {
+			c.Next()
+			return
+		}
+
+		c.Set("id", idInt)
+		userGroup, err := model.CacheGetUserGroup(idInt)
+		if err == nil {
+			c.Set("group", userGroup)
+		}
+		c.Next()
+	}
+}
+
 func UserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authHelper(c, config.RoleCommonUser)
@@ -87,31 +111,29 @@ func RootAuth() func(c *gin.Context) {
 func tokenAuth(c *gin.Context, key string) {
 	key = strings.TrimPrefix(key, "Bearer ")
 	key = strings.TrimPrefix(key, "sk-")
-	parts := strings.Split(key, "-")
+
+	if len(key) < 48 {
+		abortWithMessage(c, http.StatusUnauthorized, "无效的令牌")
+		return
+	}
+
+	parts := strings.Split(key, "#")
 	key = parts[0]
 	token, err := model.ValidateUserToken(key)
 	if err != nil {
 		abortWithMessage(c, http.StatusUnauthorized, err.Error())
 		return
 	}
-	userEnabled, err := model.CacheIsUserEnabled(token.UserId)
-	if err != nil {
-		abortWithMessage(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !userEnabled {
-		abortWithMessage(c, http.StatusForbidden, "用户已被封禁")
-		return
-	}
+
 	c.Set("id", token.UserId)
 	c.Set("token_id", token.Id)
 	c.Set("token_name", token.Name)
-	c.Set("chat_cache", token.ChatCache)
+	c.Set("token_group", token.Group)
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
 			if strings.HasPrefix(parts[1], "!") {
 				channelId := utils.String2Int(parts[1][1:])
-				c.Set("skip_channel_id", channelId)
+				c.Set("skip_channel_ids", []int{channelId})
 			} else {
 				channelId := utils.String2Int(parts[1])
 				if channelId == 0 {
@@ -133,13 +155,61 @@ func tokenAuth(c *gin.Context, key string) {
 
 func OpenaiAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		isWebSocket := c.GetHeader("Upgrade") == "websocket"
 		key := c.Request.Header.Get("Authorization")
+
+		if isWebSocket && key == "" {
+			protocols := c.Request.Header["Sec-Websocket-Protocol"]
+			if len(protocols) > 0 {
+				protocolList := strings.Split(protocols[0], ",")
+				for _, protocol := range protocolList {
+					protocol = strings.TrimSpace(protocol)
+					if strings.HasPrefix(protocol, "openai-insecure-api-key.") {
+						key = strings.TrimPrefix(protocol, "openai-insecure-api-key.")
+						break
+					}
+				}
+			}
+		}
+		tokenAuth(c, key)
+	}
+}
+
+func ClaudeAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		key := c.Request.Header.Get("x-api-key")
+		tokenAuth(c, key)
+	}
+}
+
+func GeminiAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		key := c.Request.Header.Get("x-goog-api-key")
+		if key == "" {
+			// 查询GET参数
+			key = c.Query("key")
+		}
 		tokenAuth(c, key)
 	}
 }
 
 func MjAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		// 判断path :mode
+		model := c.Param("mode")
+
+		if model != "" && model != "mj-fast" && model != "mj-turbo" && model != "mj-relax" {
+			midjourneyAbortWithMessage(c, 4, "无效的加速模式")
+			return
+		}
+
+		if model == "" {
+			model = "mj-fast"
+		}
+
+		model = strings.TrimPrefix(model, "mj-")
+		c.Set("mj_model", model)
+
 		key := c.Request.Header.Get("mj-api-secret")
 		tokenAuth(c, key)
 	}

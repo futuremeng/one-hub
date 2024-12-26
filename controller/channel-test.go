@@ -15,15 +15,20 @@ import (
 	providers_base "one-api/providers/base"
 	"one-api/types"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func testChannel(channel *model.Channel, testModel string) (err error, openaiErr *types.OpenAIError) {
-	if channel.TestModel == "" {
+func testChannel(channel *model.Channel, testModel string) (err error, openaiErr *types.OpenAIErrorWithStatusCode) {
+	if testModel == "" && channel.TestModel == "" {
 		return errors.New("请填写测速模型后再试"), nil
+	}
+
+	if testModel == "" {
+		testModel = channel.TestModel
 	}
 
 	// 创建一个 http.Request
@@ -36,25 +41,18 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
-	request := buildTestRequest()
-
-	if testModel != "" {
-		request.Model = testModel
-	} else {
-		request.Model = channel.TestModel
-	}
 
 	provider := providers.GetProvider(channel, c)
 	if provider == nil {
 		return errors.New("channel not implemented"), nil
 	}
 
-	newModelName, err := provider.ModelMappingHandler(request.Model)
+	newModelName, err := provider.ModelMappingHandler(testModel)
 	if err != nil {
 		return err, nil
 	}
 
-	request.Model = newModelName
+	request := buildTestRequest(newModelName)
 
 	chatProvider, ok := provider.(providers_base.ChatInterface)
 	if !ok {
@@ -66,7 +64,7 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	response, openAIErrorWithStatusCode := chatProvider.CreateChatCompletion(request)
 
 	if openAIErrorWithStatusCode != nil {
-		return errors.New(openAIErrorWithStatusCode.Message), &openAIErrorWithStatusCode.OpenAIError
+		return errors.New(openAIErrorWithStatusCode.Message), openAIErrorWithStatusCode
 	}
 
 	// 转换为JSON字符串
@@ -76,7 +74,7 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	return nil, nil
 }
 
-func buildTestRequest() *types.ChatCompletionRequest {
+func buildTestRequest(modelName string) *types.ChatCompletionRequest {
 	testRequest := &types.ChatCompletionRequest{
 		Messages: []types.ChatCompletionMessage{
 			{
@@ -84,10 +82,16 @@ func buildTestRequest() *types.ChatCompletionRequest {
 				Content: "You just need to output 'hi' next.",
 			},
 		},
-		Model:     "",
-		MaxTokens: 2,
-		Stream:    false,
+		Model:  modelName,
+		Stream: false,
 	}
+
+	if strings.HasPrefix(modelName, "o1-") {
+		testRequest.MaxCompletionTokens = 2
+	} else {
+		testRequest.MaxTokens = 2
+	}
+
 	return testRequest
 }
 
@@ -110,22 +114,31 @@ func TestChannel(c *gin.Context) {
 	}
 	testModel := c.Query("model")
 	tik := time.Now()
-	err, _ = testChannel(channel, testModel)
+	err, openaiErr := testChannel(channel, testModel)
 	tok := time.Now()
 	milliseconds := tok.Sub(tik).Milliseconds()
-	go channel.UpdateResponseTime(milliseconds)
 	consumedTime := float64(milliseconds) / 1000.0
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-			"time":    consumedTime,
-		})
-		return
+
+	success := false
+	msg := ""
+	if openaiErr != nil {
+		if ShouldDisableChannel(channel.Type, openaiErr) {
+			msg = fmt.Sprintf("测速失败，已被禁用，原因：%s", err.Error())
+			DisableChannel(channel.Id, channel.Name, err.Error(), false)
+		} else {
+			msg = fmt.Sprintf("测速失败，原因：%s", err.Error())
+		}
+	} else if err != nil {
+		msg = fmt.Sprintf("测速失败，原因：%s", err.Error())
+	} else {
+		success = true
+		msg = "测速成功"
+		go channel.UpdateResponseTime(milliseconds)
 	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
+		"success": success,
+		"message": msg,
 		"time":    consumedTime,
 	})
 }
@@ -189,7 +202,7 @@ func testAllChannels(isNotify bool) error {
 					continue
 				}
 
-				if ShouldDisableChannel(openaiErr, -1) {
+				if ShouldDisableChannel(channel.Type, openaiErr) {
 					sendMessage += fmt.Sprintf("- 已被禁用，原因：%s\n\n", utils.EscapeMarkdownText(err.Error()))
 					DisableChannel(channel.Id, channel.Name, err.Error(), false)
 					continue

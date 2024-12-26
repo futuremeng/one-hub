@@ -7,10 +7,13 @@ import (
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
+	apiRouter.GET("/metrics", middleware.MetricsWithBasicAuth(), gin.WrapH(promhttp.Handler()))
+
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.POST("/telegram/:token", middleware.Telegram(), controller.TelegramBotWebHook)
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
@@ -20,6 +23,8 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", controller.GetAbout)
 		apiRouter.GET("/prices", middleware.PricesAuth(), middleware.CORS(), controller.GetPricesList)
 		apiRouter.GET("/ownedby", relay.GetModelOwnedBy)
+		apiRouter.GET("/available_model", middleware.CORS(), middleware.TrySetUserBySession(), relay.AvailableModel)
+		apiRouter.GET("/user_group_map", middleware.TrySetUserBySession(), controller.GetUserGroupRatio)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/verification", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
@@ -30,6 +35,9 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), controller.WeChatAuth)
 		apiRouter.GET("/oauth/wechat/bind", middleware.CriticalRateLimit(), middleware.UserAuth(), controller.WeChatBind)
 		apiRouter.GET("/oauth/email/bind", middleware.CriticalRateLimit(), middleware.UserAuth(), controller.EmailBind)
+
+		apiRouter.GET("/oauth/endpoint", middleware.CriticalRateLimit(), controller.OIDCEndpoint)
+		apiRouter.GET("/oauth/oidc", middleware.CriticalRateLimit(), controller.OIDCAuth)
 
 		apiRouter.Any("/payment/notify/:uuid", controller.PaymentCallback)
 
@@ -49,7 +57,6 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/token", controller.GenerateAccessToken)
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.POST("/topup", controller.TopUp)
-				selfRoute.GET("/models", relay.ListModels)
 				selfRoute.GET("/payment", controller.GetUserPaymentList)
 				selfRoute.POST("/order", controller.CreateOrder)
 				selfRoute.GET("/order/status", controller.CheckOrderStatus)
@@ -77,6 +84,28 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.PUT("/telegram/reload", controller.ReloadTelegramBot)
 			optionRoute.GET("/telegram/:id", controller.GetTelegramMenu)
 			optionRoute.DELETE("/telegram/:id", controller.DeleteTelegramMenu)
+		}
+
+		modelOwnedByRoute := apiRouter.Group("/model_ownedby")
+		modelOwnedByRoute.Use(middleware.AdminAuth())
+		{
+			modelOwnedByRoute.GET("/", controller.GetAllModelOwnedBy)
+			modelOwnedByRoute.GET("/:id", controller.GetModelOwnedBy)
+			modelOwnedByRoute.POST("/", controller.CreateModelOwnedBy)
+			modelOwnedByRoute.PUT("/", controller.UpdateModelOwnedBy)
+			modelOwnedByRoute.DELETE("/:id", controller.DeleteModelOwnedBy)
+		}
+
+		userGroup := apiRouter.Group("/user_group")
+		userGroup.Use(middleware.AdminAuth())
+		{
+			userGroup.GET("/", controller.GetUserGroups)
+			userGroup.GET("/:id", controller.GetUserGroupById)
+			userGroup.POST("/", controller.AddUserGroup)
+			userGroup.PUT("/enable/:id", controller.ChangeUserGroupEnable)
+			userGroup.PUT("/", controller.UpdateUserGroup)
+			userGroup.DELETE("/:id", controller.DeleteUserGroup)
+
 		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
@@ -144,12 +173,8 @@ func SetApiRouter(router *gin.Engine) {
 		analyticsRoute := apiRouter.Group("/analytics")
 		analyticsRoute.Use(middleware.AdminAuth())
 		{
-			analyticsRoute.GET("/user_statistics", controller.GetUserStatistics)
-			analyticsRoute.GET("/channel_statistics", controller.GetChannelStatistics)
-			analyticsRoute.GET("/redemption_statistics", controller.GetRedemptionStatistics)
-			analyticsRoute.GET("/users_period", controller.GetUserStatisticsByPeriod)
-			analyticsRoute.GET("/channel_period", controller.GetChannelExpensesByPeriod)
-			analyticsRoute.GET("/redemption_period", controller.GetRedemptionStatisticsByPeriod)
+			analyticsRoute.GET("/statistics", controller.GetStatisticsDetail)
+			analyticsRoute.GET("/period", controller.GetStatisticsByPeriod)
 		}
 
 		pricesRoute := apiRouter.Group("/prices")

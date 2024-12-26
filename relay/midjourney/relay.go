@@ -46,7 +46,7 @@ func RelayMidjourney(c *gin.Context) {
 			"code":        err.Code,
 		})
 		channelId := c.GetInt("channel_id")
-		logger.SysError(fmt.Sprintf("relay error (channel #%d): %s", channelId, fmt.Sprintf("%s %s", err.Description, err.Result)))
+		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", err.Description, err.Result)))
 	}
 }
 
@@ -72,6 +72,9 @@ func Path2RelayModeMidjourney(path string) int {
 	} else if strings.HasSuffix(path, "/mj/insight-face/swap") {
 		// midjourney plus
 		relayMode = provider.RelayModeMidjourneySwapFace
+	} else if strings.HasSuffix(path, "/submit/upload-discord-images") {
+		// midjourney plus
+		relayMode = provider.RelayModeMidjourneyUpload
 	} else if strings.HasSuffix(path, "/mj/submit/imagine") {
 		relayMode = provider.RelayModeMidjourneyImagine
 	} else if strings.HasSuffix(path, "/mj/submit/blend") {

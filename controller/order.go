@@ -44,6 +44,12 @@ func CreateOrder(c *gin.Context) {
 	}
 
 	userId := c.GetInt("id")
+	user, err := model.GetUserById(userId, false)
+	if err != nil {
+		common.APIRespondWithError(c, http.StatusOK, errors.New("用户不存在"))
+		return
+	}
+
 	// 关闭用户未完成的订单
 	go model.CloseUnfinishedOrder()
 
@@ -54,10 +60,9 @@ func CreateOrder(c *gin.Context) {
 	}
 	// 获取手续费和支付金额
 	discount, fee, payMoney := calculateOrderAmount(paymentService.Payment, orderReq.Amount)
-
 	// 开始支付
 	tradeNo := utils.GenerateTradeNo()
-	payRequest, err := paymentService.Pay(tradeNo, payMoney)
+	payRequest, err := paymentService.Pay(tradeNo, payMoney, user)
 	if err != nil {
 		common.APIRespondWithError(c, http.StatusOK, errors.New("创建支付失败，请稍后再试"))
 		return
@@ -163,7 +168,7 @@ func PaymentCallback(c *gin.Context) {
 		return
 	}
 
-	model.RecordLog(order.UserId, model.LogTypeTopup, fmt.Sprintf("在线充值成功，充值quota: %d，支付金额：%.2f %s", order.Quota, order.OrderAmount, order.OrderCurrency))
+	model.RecordLog(order.UserId, model.LogTypeTopup, fmt.Sprintf("在线充值成功，充值积分: %d，支付金额：%.2f %s", order.Quota, order.OrderAmount, order.OrderCurrency))
 
 }
 

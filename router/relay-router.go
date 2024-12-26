@@ -16,17 +16,20 @@ func SetRelayRouter(router *gin.Engine) {
 	setOpenAIRouter(router)
 	setMJRouter(router)
 	setSunoRouter(router)
+	setClaudeRouter(router)
+	setGeminiRouter(router)
+	setRecraftRouter(router)
 }
 
 func setOpenAIRouter(router *gin.Engine) {
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.OpenaiAuth(), middleware.Distribute())
 	{
-		modelsRouter.GET("", relay.ListModels)
+		modelsRouter.GET("", relay.ListModelsByToken)
 		modelsRouter.GET("/:model", relay.RetrieveModel)
 	}
 	relayV1Router := router.Group("/v1")
-	relayV1Router.Use(middleware.RelayPanicRecover(), middleware.OpenaiAuth(), middleware.Distribute())
+	relayV1Router.Use(middleware.RelayPanicRecover(), middleware.OpenaiAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
 	{
 		relayV1Router.POST("/completions", relay.Relay)
 		relayV1Router.POST("/chat/completions", relay.Relay)
@@ -40,6 +43,8 @@ func setOpenAIRouter(router *gin.Engine) {
 		relayV1Router.POST("/audio/translations", relay.Relay)
 		relayV1Router.POST("/audio/speech", relay.Relay)
 		relayV1Router.POST("/moderations", relay.Relay)
+		relayV1Router.POST("/rerank", relay.RelayRerank)
+		relayV1Router.GET("/realtime", relay.ChatRealtime)
 
 		relayV1Router.Use(middleware.SpecifiedChannel())
 		{
@@ -70,7 +75,7 @@ func setMJRouter(router *gin.Engine) {
 // Path: router/relay-router.go
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {
 	relayMjRouter.GET("/image/:id", midjourney.RelayMidjourneyImage)
-	relayMjRouter.Use(middleware.MjAuth(), middleware.Distribute())
+	relayMjRouter.Use(middleware.RelayMJPanicRecover(), middleware.MjAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
 	{
 		relayMjRouter.POST("/submit/action", midjourney.RelayMidjourney)
 		relayMjRouter.POST("/submit/shorten", midjourney.RelayMidjourney)
@@ -85,15 +90,47 @@ func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {
 		relayMjRouter.GET("/task/:id/image-seed", midjourney.RelayMidjourney)
 		relayMjRouter.POST("/task/list-by-condition", midjourney.RelayMidjourney)
 		relayMjRouter.POST("/insight-face/swap", midjourney.RelayMidjourney)
+		relayMjRouter.POST("/submit/upload-discord-images", midjourney.RelayMidjourney)
 	}
 }
 
 func setSunoRouter(router *gin.Engine) {
 	relaySunoRouter := router.Group("/suno")
-	relaySunoRouter.Use(middleware.OpenaiAuth(), middleware.Distribute())
+	relaySunoRouter.Use(middleware.RelaySunoPanicRecover(), middleware.OpenaiAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
 	{
 		relaySunoRouter.POST("/submit/:action", task.RelayTaskSubmit)
 		relaySunoRouter.POST("/fetch", suno.GetFetch)
 		relaySunoRouter.GET("/fetch/:id", suno.GetFetchByID)
+	}
+}
+
+func setClaudeRouter(router *gin.Engine) {
+	relayClaudeRouter := router.Group("/claude")
+	relayV1Router := relayClaudeRouter.Group("/v1")
+	relayV1Router.Use(middleware.RelayCluadePanicRecover(), middleware.ClaudeAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
+	{
+		relayV1Router.POST("/messages", relay.RelaycClaudeOnly)
+	}
+}
+
+func setGeminiRouter(router *gin.Engine) {
+	relayGeminiRouter := router.Group("/gemini")
+	relayV1Router := relayGeminiRouter.Group("/v1beta")
+	relayV1Router.Use(middleware.RelayGeminiPanicRecover(), middleware.GeminiAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
+	{
+		relayV1Router.POST("/models/:model", relay.RelaycGeminiOnly)
+	}
+}
+
+func setRecraftRouter(router *gin.Engine) {
+	relayRecraftRouter := router.Group("/recraftAI/v1")
+	relayRecraftRouter.Use(middleware.RelayPanicRecover(), middleware.OpenaiAuth(), middleware.Distribute(), middleware.DynamicRedisRateLimiter())
+	{
+		relayRecraftRouter.POST("/images/generations", relay.Relay)
+		relayRecraftRouter.POST("/images/vectorize", relay.RelayRecraftAI)
+		relayRecraftRouter.POST("/images/removeBackground", relay.RelayRecraftAI)
+		relayRecraftRouter.POST("/images/clarityUpscale", relay.RelayRecraftAI)
+		relayRecraftRouter.POST("/images/generativeUpscale", relay.RelayRecraftAI)
+		relayRecraftRouter.POST("/styles", relay.RelayRecraftAI)
 	}
 }

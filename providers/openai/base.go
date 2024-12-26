@@ -33,7 +33,7 @@ func (f OpenAIProviderFactory) Create(channel *model.Channel) base.ProviderInter
 // 创建 OpenAIProvider
 // https://platform.openai.com/docs/api-reference/introduction
 func CreateOpenAIProvider(channel *model.Channel, baseURL string) *OpenAIProvider {
-	openaiConfig := getOpenAIConfig(baseURL)
+	openaiConfig := getOpenAIConfig(baseURL, channel)
 
 	OpenAIProvider := &OpenAIProvider{
 		BaseProvider: base.BaseProvider{
@@ -52,8 +52,8 @@ func CreateOpenAIProvider(channel *model.Channel, baseURL string) *OpenAIProvide
 	return OpenAIProvider
 }
 
-func getOpenAIConfig(baseURL string) base.ProviderConfig {
-	return base.ProviderConfig{
+func getOpenAIConfig(baseURL string, channel *model.Channel) base.ProviderConfig {
+	providerConfig := base.ProviderConfig{
 		BaseURL:             baseURL,
 		Completions:         "/v1/completions",
 		ChatCompletions:     "/v1/chat/completions",
@@ -66,7 +66,21 @@ func getOpenAIConfig(baseURL string) base.ProviderConfig {
 		ImagesEdit:          "/v1/images/edits",
 		ImagesVariations:    "/v1/images/variations",
 		ModelList:           "/v1/models",
+		ChatRealtime:        "/v1/realtime",
 	}
+
+	if channel.Type != config.ChannelTypeCustom || channel.Plugin == nil {
+		return providerConfig
+	}
+
+	customMapping, ok := channel.Plugin.Data()["customize"]
+	if !ok {
+		return providerConfig
+	}
+
+	providerConfig.SetAPIUri(customMapping)
+
+	return providerConfig
 }
 
 // 请求错误处理
@@ -92,6 +106,23 @@ func ErrorHandle(openaiError *types.OpenAIErrorResponse) *types.OpenAIError {
 func (p *OpenAIProvider) GetFullRequestURL(requestURL string, modelName string) string {
 	baseURL := strings.TrimSuffix(p.GetBaseURL(), "/")
 
+	if strings.Contains(modelName, "-realtime") {
+		if strings.HasPrefix(baseURL, "https://") {
+			baseURL = strings.Replace(baseURL, "https://", "wss://", 1)
+		} else {
+			baseURL = strings.Replace(baseURL, "http://", "ws://", 1)
+		}
+
+		if p.IsAzure {
+			// wss://my-eastus2-openai-resource.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview-1001
+			requestURL = fmt.Sprintf("/openai/%s?api-version=%s&deployment=%s", requestURL, p.Channel.Other, modelName)
+		} else {
+			requestURL += fmt.Sprintf("?model=%s", modelName)
+		}
+
+		return fmt.Sprintf("%s%s", baseURL, requestURL)
+	}
+
 	if p.IsAzure {
 		apiVersion := p.Channel.Other
 		if modelName != "" {
@@ -109,16 +140,6 @@ func (p *OpenAIProvider) GetFullRequestURL(requestURL string, modelName string) 
 			requestURL = strings.TrimPrefix(requestURL, "/v1")
 			requestURL = fmt.Sprintf("/openai%s?api-version=%s", requestURL, apiVersion)
 		}
-
-	} else if p.Channel.Type == config.ChannelTypeCustom && p.Channel.Other != "" {
-		replaceValue := p.Channel.Other
-		if replaceValue == "disable" {
-			replaceValue = ""
-		} else {
-			replaceValue = "/" + replaceValue
-		}
-
-		requestURL = strings.Replace(requestURL, "/v1", replaceValue, 1)
 	}
 
 	if strings.HasPrefix(baseURL, "https://gateway.ai.cloudflare.com") {

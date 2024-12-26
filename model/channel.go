@@ -29,12 +29,15 @@ type Channel struct {
 	Tag                string  `json:"tag" form:"tag" gorm:"type:varchar(32);default:''"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:varchar(1024);default:''"`
+	ModelHeaders       *string `json:"model_headers" gorm:"type:varchar(1024);default:''"`
 	Priority           *int64  `json:"priority" gorm:"bigint;default:0"`
 	Proxy              *string `json:"proxy" gorm:"type:varchar(255);default:''"`
 	TestModel          string  `json:"test_model" form:"test_model" gorm:"type:varchar(50);default:''"`
 	OnlyChat           bool    `json:"only_chat" form:"only_chat" gorm:"default:false"`
+	PreCost            int     `json:"pre_cost" form:"pre_cost" gorm:"default:1"`
 
-	Plugin *datatypes.JSONType[PluginType] `json:"plugin" form:"plugin" gorm:"type:json"`
+	Plugin    *datatypes.JSONType[PluginType] `json:"plugin" form:"plugin" gorm:"type:json"`
+	DeletedAt gorm.DeletedAt                  `json:"-" gorm:"index"`
 }
 
 type PluginType map[string]map[string]interface{}
@@ -70,7 +73,7 @@ func GetChannelsList(params *SearchChannelsParams) (*DataResult[Channel], error)
 	}
 
 	if params.Name != "" {
-		db = db.Where("name LIKE ?", params.Name+"%")
+		db = db.Where("name LIKE ?", "%"+params.Name+"%")
 	}
 
 	if params.Group != "" {
@@ -78,7 +81,7 @@ func GetChannelsList(params *SearchChannelsParams) (*DataResult[Channel], error)
 	}
 
 	if params.Models != "" {
-		db = db.Where("id IN (SELECT channel_id FROM abilities WHERE model IN (?))", params.Models)
+		db = db.Where("id IN (SELECT channel_id FROM abilities WHERE model LIKE ? GROUP BY channel_id)", "%"+params.Models+"%")
 	}
 
 	if params.Other != "" {
@@ -303,19 +306,24 @@ func (channel *Channel) StatusToStr() string {
 }
 
 func UpdateChannelStatusById(id int, status int) {
-	err := UpdateAbilityStatus(id, status == config.ChannelStatusEnabled)
+	tx := DB.Begin()
+
+	err := UpdateAbilityStatus(tx, id, status == config.ChannelStatusEnabled)
 	if err != nil {
 		logger.SysError("failed to update ability status: " + err.Error())
+		tx.Rollback()
+		return
 	}
-	err = DB.Model(&Channel{}).Where("id = ?", id).Update("status", status).Error
+	err = tx.Model(&Channel{}).Where("id = ?", id).Update("status", status).Error
 	if err != nil {
 		logger.SysError("failed to update channel status: " + err.Error())
+		tx.Rollback()
+		return
 	}
 
-	if err == nil {
+	tx.Commit()
 
-		go ChannelGroup.Load()
-	}
+	go ChannelGroup.ChangeStatus(id, status == config.ChannelStatusEnabled)
 }
 
 func UpdateChannelUsedQuota(id int, quota int) {

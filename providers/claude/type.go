@@ -18,8 +18,30 @@ const (
 )
 
 type ClaudeError struct {
-	Type  string          `json:"type"`
-	Error ClaudeErrorInfo `json:"error"`
+	Type      string          `json:"type"`
+	ErrorInfo ClaudeErrorInfo `json:"error"`
+}
+
+func (e *ClaudeError) Error() string {
+	bytes, _ := json.Marshal(e)
+	return string(bytes) + "\n"
+}
+
+type ClaudeErrorWithStatusCode struct {
+	ClaudeError
+	StatusCode int  `json:"status_code"`
+	LocalError bool `json:"-"`
+}
+
+func (e *ClaudeErrorWithStatusCode) ToOpenAiError() *types.OpenAIErrorWithStatusCode {
+	return &types.OpenAIErrorWithStatusCode{
+		StatusCode: e.StatusCode,
+		OpenAIError: types.OpenAIError{
+			Type:    e.Type,
+			Message: e.ErrorInfo.Message,
+		},
+		LocalError: e.LocalError,
+	}
 }
 
 type ClaudeErrorInfo struct {
@@ -60,30 +82,32 @@ type ContentSource struct {
 }
 
 type MessageContent struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
-	Source    *ContentSource `json:"source,omitempty"`
-	Id        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     any            `json:"input,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	ToolUseId string         `json:"tool_use_id,omitempty"`
+	Type         string         `json:"type"`
+	Text         string         `json:"text,omitempty"`
+	Source       *ContentSource `json:"source,omitempty"`
+	Id           string         `json:"id,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Input        any            `json:"input,omitempty"`
+	Content      any            `json:"content,omitempty"`
+	IsError      *bool          `json:"is_error,omitempty"`
+	ToolUseId    string         `json:"tool_use_id,omitempty"`
+	CacheControl any            `json:"cache_control,omitempty"`
 }
 
 type Message struct {
-	Role    string           `json:"role"`
-	Content []MessageContent `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
 }
 
 type ClaudeRequest struct {
 	Model         string      `json:"model,omitempty"`
-	System        string      `json:"system,omitempty"`
+	System        any         `json:"system,omitempty"`
 	Messages      []Message   `json:"messages"`
 	MaxTokens     int         `json:"max_tokens"`
 	StopSequences []string    `json:"stop_sequences,omitempty"`
-	Temperature   float64     `json:"temperature,omitempty"`
-	TopP          float64     `json:"top_p,omitempty"`
-	TopK          int         `json:"top_k,omitempty"`
+	Temperature   *float64    `json:"temperature,omitempty"`
+	TopP          *float64    `json:"top_p,omitempty"`
+	TopK          *int        `json:"top_k,omitempty"`
 	Tools         []Tools     `json:"tools,omitempty"`
 	ToolChoice    *ToolChoice `json:"tool_choice,omitempty"`
 	//ClaudeMetadata    `json:"metadata,omitempty"`
@@ -91,19 +115,27 @@ type ClaudeRequest struct {
 }
 
 type ToolChoice struct {
-	Type string `json:"type,omitempty"`
-	Name string `json:"name,omitempty"`
+	Type                   string `json:"type,omitempty"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type Tools struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"input_schema,omitempty"`
+	Type            string `json:"type,omitempty"`
+	CacheControl    any    `json:"cache_control,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	InputSchema     any    `json:"input_schema,omitempty"`
+	DisplayHeightPx int    `json:"display_height_px,omitempty"`
+	DisplayWidthPx  int    `json:"display_width_px,omitempty"`
+	DisplayNumber   int    `json:"display_number,omitempty"`
 }
 
 type Usage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens,omitempty"`
+	OutputTokens             int `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 type ClaudeResponse struct {
 	Id           string       `json:"id"`
@@ -114,7 +146,7 @@ type ClaudeResponse struct {
 	StopReason   string       `json:"stop_reason,omitempty"`
 	StopSequence string       `json:"stop_sequence,omitempty"`
 	Usage        Usage        `json:"usage,omitempty"`
-	Error        ClaudeError  `json:"error,omitempty"`
+	Error        *ClaudeError `json:"error,omitempty"`
 }
 
 type Delta struct {
@@ -132,7 +164,7 @@ type ClaudeStreamResponse struct {
 	Delta        Delta          `json:"delta,omitempty"`
 	ContentBlock ContentBlock   `json:"content_block,omitempty"`
 	Usage        Usage          `json:"usage,omitempty"`
-	Error        ClaudeError    `json:"error,omitempty"`
+	Error        *ClaudeError   `json:"error,omitempty"`
 }
 
 type ContentBlock struct {

@@ -41,7 +41,6 @@ func InitOptionMap() {
 	config.OptionMap["ApproximateTokenEnabled"] = strconv.FormatBool(config.ApproximateTokenEnabled)
 	config.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(config.LogConsumeEnabled)
 	config.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(config.DisplayInCurrencyEnabled)
-	config.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(config.DisplayTokenStatEnabled)
 	config.OptionMap["ChannelDisableThreshold"] = strconv.FormatFloat(config.ChannelDisableThreshold, 'f', -1, 64)
 	config.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(config.EmailDomainRestrictionEnabled)
 	config.OptionMap["EmailDomainWhitelist"] = strings.Join(config.EmailDomainWhitelist, ",")
@@ -58,7 +57,13 @@ func InitOptionMap() {
 	config.OptionMap["Logo"] = config.Logo
 	config.OptionMap["ServerAddress"] = ""
 	config.OptionMap["GitHubClientId"] = ""
-	config.OptionMap["GitHubClientSecret"] = ""
+
+	config.OptionMap["OIDCClientId"] = ""
+	config.OptionMap["OIDCClientSecret"] = ""
+	config.OptionMap["OIDCIssuer"] = ""
+	config.OptionMap["OIDCScopes"] = ""
+	config.OptionMap["OIDCUsernameClaims"] = ""
+
 	config.OptionMap["WeChatServerAddress"] = ""
 	config.OptionMap["WeChatServerToken"] = ""
 	config.OptionMap["WeChatAccountQRCodeImageURL"] = ""
@@ -69,7 +74,6 @@ func InitOptionMap() {
 	config.OptionMap["QuotaForInvitee"] = strconv.Itoa(config.QuotaForInvitee)
 	config.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(config.QuotaRemindThreshold)
 	config.OptionMap["PreConsumedQuota"] = strconv.Itoa(config.PreConsumedQuota)
-	config.OptionMap["GroupRatio"] = common.GroupRatio2JSONString()
 	config.OptionMap["TopUpLink"] = config.TopUpLink
 	config.OptionMap["ChatLink"] = config.ChatLink
 	config.OptionMap["ChatLinks"] = config.ChatLinks
@@ -79,14 +83,18 @@ func InitOptionMap() {
 
 	config.OptionMap["MjNotifyEnabled"] = strconv.FormatBool(config.MjNotifyEnabled)
 
-	config.OptionMap["ChatCacheEnabled"] = strconv.FormatBool(config.ChatCacheEnabled)
-	config.OptionMap["ChatCacheExpireMinute"] = strconv.Itoa(config.ChatCacheExpireMinute)
-
 	config.OptionMap["ChatImageRequestProxy"] = ""
 
 	config.OptionMap["PaymentUSDRate"] = strconv.FormatFloat(config.PaymentUSDRate, 'f', -1, 64)
 	config.OptionMap["PaymentMinAmount"] = strconv.Itoa(config.PaymentMinAmount)
 	config.OptionMap["RechargeDiscount"] = common.RechargeDiscount2JSONString()
+
+	config.OptionMap["CFWorkerImageUrl"] = config.CFWorkerImageUrl
+	config.OptionMap["CFWorkerImageKey"] = config.CFWorkerImageKey
+	config.OptionMap["OldTokenMaxId"] = strconv.Itoa(config.OldTokenMaxId)
+	config.OptionMap["GitHubOldIdCloseEnabled"] = strconv.FormatBool(config.GitHubOldIdCloseEnabled)
+
+	config.OptionMap["AudioTokenJson"] = GetDefaultAudioRatio()
 
 	config.OptionMapRWMutex.Unlock()
 	loadOptionsFromDatabase()
@@ -127,16 +135,16 @@ func UpdateOption(key string, value string) error {
 }
 
 var optionIntMap = map[string]*int{
-	"SMTPPort":              &config.SMTPPort,
-	"QuotaForNewUser":       &config.QuotaForNewUser,
-	"QuotaForInviter":       &config.QuotaForInviter,
-	"QuotaForInvitee":       &config.QuotaForInvitee,
-	"QuotaRemindThreshold":  &config.QuotaRemindThreshold,
-	"PreConsumedQuota":      &config.PreConsumedQuota,
-	"RetryTimes":            &config.RetryTimes,
-	"RetryCooldownSeconds":  &config.RetryCooldownSeconds,
-	"ChatCacheExpireMinute": &config.ChatCacheExpireMinute,
-	"PaymentMinAmount":      &config.PaymentMinAmount,
+	"SMTPPort":             &config.SMTPPort,
+	"QuotaForNewUser":      &config.QuotaForNewUser,
+	"QuotaForInviter":      &config.QuotaForInviter,
+	"QuotaForInvitee":      &config.QuotaForInvitee,
+	"QuotaRemindThreshold": &config.QuotaRemindThreshold,
+	"PreConsumedQuota":     &config.PreConsumedQuota,
+	"RetryTimes":           &config.RetryTimes,
+	"RetryCooldownSeconds": &config.RetryCooldownSeconds,
+	"PaymentMinAmount":     &config.PaymentMinAmount,
+	"OldTokenMaxId":        &config.OldTokenMaxId,
 }
 
 var optionBoolMap = map[string]*bool{
@@ -144,6 +152,7 @@ var optionBoolMap = map[string]*bool{
 	"PasswordLoginEnabled":           &config.PasswordLoginEnabled,
 	"EmailVerificationEnabled":       &config.EmailVerificationEnabled,
 	"GitHubOAuthEnabled":             &config.GitHubOAuthEnabled,
+	"OIDCAuthEnabled":                &config.OIDCAuthEnabled,
 	"WeChatAuthEnabled":              &config.WeChatAuthEnabled,
 	"LarkAuthEnabled":                &config.LarkAuthEnabled,
 	"TurnstileCheckEnabled":          &config.TurnstileCheckEnabled,
@@ -154,9 +163,8 @@ var optionBoolMap = map[string]*bool{
 	"ApproximateTokenEnabled":        &config.ApproximateTokenEnabled,
 	"LogConsumeEnabled":              &config.LogConsumeEnabled,
 	"DisplayInCurrencyEnabled":       &config.DisplayInCurrencyEnabled,
-	"DisplayTokenStatEnabled":        &config.DisplayTokenStatEnabled,
 	"MjNotifyEnabled":                &config.MjNotifyEnabled,
-	"ChatCacheEnabled":               &config.ChatCacheEnabled,
+	"GitHubOldIdCloseEnabled":        &config.GitHubOldIdCloseEnabled,
 }
 
 var optionStringMap = map[string]*string{
@@ -167,6 +175,11 @@ var optionStringMap = map[string]*string{
 	"ServerAddress":               &config.ServerAddress,
 	"GitHubClientId":              &config.GitHubClientId,
 	"GitHubClientSecret":          &config.GitHubClientSecret,
+	"OIDCClientId":                &config.OIDCClientId,
+	"OIDCClientSecret":            &config.OIDCClientSecret,
+	"OIDCIssuer":                  &config.OIDCIssuer,
+	"OIDCScopes":                  &config.OIDCScopes,
+	"OIDCUsernameClaims":          &config.OIDCUsernameClaims,
 	"Footer":                      &config.Footer,
 	"SystemName":                  &config.SystemName,
 	"Logo":                        &config.Logo,
@@ -181,6 +194,8 @@ var optionStringMap = map[string]*string{
 	"LarkClientId":                &config.LarkClientId,
 	"LarkClientSecret":            &config.LarkClientSecret,
 	"ChatImageRequestProxy":       &config.ChatImageRequestProxy,
+	"CFWorkerImageUrl":            &config.CFWorkerImageUrl,
+	"CFWorkerImageKey":            &config.CFWorkerImageKey,
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -205,8 +220,6 @@ func updateOptionMap(key string, value string) (err error) {
 	switch key {
 	case "EmailDomainWhitelist":
 		config.EmailDomainWhitelist = strings.Split(value, ",")
-	case "GroupRatio":
-		err = common.UpdateGroupRatioByJSONString(value)
 	case "ChannelDisableThreshold":
 		config.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64)
 	case "QuotaPerUnit":
@@ -216,6 +229,11 @@ func updateOptionMap(key string, value string) (err error) {
 	case "RechargeDiscount":
 		err = common.UpdateRechargeDiscountByJSONString(value)
 		config.RechargeDiscount = common.RechargeDiscount2JSONString()
+	case "AudioTokenJson":
+		config.AudioTokenJson = value
+		if PricingInstance != nil {
+			PricingInstance.Init()
+		}
 	}
 	return err
 }

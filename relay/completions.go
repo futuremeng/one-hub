@@ -44,6 +44,10 @@ func (r *relayCompletions) setRequest() error {
 	return nil
 }
 
+func (r *relayCompletions) IsStream() bool {
+	return r.request.Stream
+}
+
 func (r *relayCompletions) getRequest() interface{} {
 	return &r.request
 }
@@ -55,7 +59,7 @@ func (r *relayCompletions) getPromptTokens() (int, error) {
 func (r *relayCompletions) send() (err *types.OpenAIErrorWithStatusCode, done bool) {
 	provider, ok := r.provider.(providersBase.CompletionInterface)
 	if !ok {
-		err = common.StringErrorWrapper("channel not implemented", "channel_error", http.StatusServiceUnavailable)
+		err = common.StringErrorWrapperLocal("channel not implemented", "channel_error", http.StatusServiceUnavailable)
 		done = true
 		return
 	}
@@ -73,7 +77,7 @@ func (r *relayCompletions) send() (err *types.OpenAIErrorWithStatusCode, done bo
 			return r.getUsageResponse()
 		}
 
-		err = responseStreamClient(r.c, response, r.cache, doneStr)
+		err = responseStreamClient(r.c, response, doneStr)
 	} else {
 		var response *types.CompletionResponse
 		response, err = provider.CreateCompletion(&r.request)
@@ -81,7 +85,6 @@ func (r *relayCompletions) send() (err *types.OpenAIErrorWithStatusCode, done bo
 			return
 		}
 		err = responseJsonClient(r.c, response)
-		r.cache.SetResponse(response)
 	}
 
 	if err != nil {

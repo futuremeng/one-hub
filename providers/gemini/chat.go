@@ -1,10 +1,13 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"one-api/common"
+	"one-api/common/config"
 	"one-api/common/requester"
 	"one-api/common/utils"
 	"one-api/providers/base"
@@ -21,10 +24,61 @@ type GeminiStreamHandler struct {
 	LastCandidates int
 	LastType       string
 	Request        *types.ChatCompletionRequest
+
+	key string
+}
+
+type OpenAIStreamHandler struct {
+	Usage     *types.Usage
+	ModelName string
 }
 
 func (p *GeminiProvider) CreateChatCompletion(request *types.ChatCompletionRequest) (*types.ChatCompletionResponse, *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.getChatRequest(request)
+	if p.UseOpenaiAPI {
+		req, errWithCode := p.GetRequestTextBody(config.RelayModeChatCompletions, request.Model, request)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		var openaiResponse types.ChatCompletionResponse
+		response := &GeminiOpenaiChatResponse{}
+		// 发送请求
+		_, errWithCode = p.Requester.SendRequest(req, response, false)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+
+		openaiResponse = response.ChatCompletionResponse
+
+		if response.Usage == nil || response.Usage.CompletionTokens == 0 {
+			openaiResponse.Usage = &types.Usage{
+				PromptTokens:     p.Usage.PromptTokens,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			}
+			// 那么需要计算
+			response.Usage.CompletionTokens = common.CountTokenText(response.GetContent(), request.Model)
+			response.Usage.TotalTokens = response.Usage.PromptTokens + response.Usage.CompletionTokens
+		} else {
+			openaiResponse.Usage = &types.Usage{
+				PromptTokens:     response.Usage.PromptTokens,
+				CompletionTokens: response.Usage.CompletionTokens,
+				TotalTokens:      response.Usage.TotalTokens,
+			}
+		}
+
+		*p.Usage = *openaiResponse.Usage
+
+		return &openaiResponse, nil
+	}
+
+	geminiRequest, errWithCode := ConvertFromChatOpenai(request)
+	if errWithCode != nil {
+		return nil, errWithCode
+	}
+
+	req, errWithCode := p.getChatRequest(geminiRequest)
 	if errWithCode != nil {
 		return nil, errWithCode
 	}
@@ -41,7 +95,43 @@ func (p *GeminiProvider) CreateChatCompletion(request *types.ChatCompletionReque
 }
 
 func (p *GeminiProvider) CreateChatCompletionStream(request *types.ChatCompletionRequest) (requester.StreamReaderInterface[string], *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.getChatRequest(request)
+
+	channel := p.GetChannel()
+	if p.UseOpenaiAPI {
+		streamOptions := request.StreamOptions
+		request.StreamOptions = &types.StreamOptions{
+			IncludeUsage: true,
+		}
+
+		req, errWithCode := p.GetRequestTextBody(config.RelayModeChatCompletions, request.Model, request)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+		defer req.Body.Close()
+
+		// 恢复原来的配置
+		request.StreamOptions = streamOptions
+
+		// 发送请求
+		resp, errWithCode := p.Requester.SendRequestRaw(req)
+		if errWithCode != nil {
+			return nil, errWithCode
+		}
+
+		chatHandler := OpenAIStreamHandler{
+			Usage:     p.Usage,
+			ModelName: request.Model,
+		}
+
+		return requester.RequestStream[string](p.Requester, resp, chatHandler.HandlerChatStream)
+	}
+
+	geminiRequest, errWithCode := ConvertFromChatOpenai(request)
+	if errWithCode != nil {
+		return nil, errWithCode
+	}
+
+	req, errWithCode := p.getChatRequest(geminiRequest)
 	if errWithCode != nil {
 		return nil, errWithCode
 	}
@@ -58,28 +148,25 @@ func (p *GeminiProvider) CreateChatCompletionStream(request *types.ChatCompletio
 		LastCandidates: 0,
 		LastType:       "",
 		Request:        request,
+
+		key: channel.Key,
 	}
 
 	return requester.RequestStream[string](p.Requester, resp, chatHandler.HandlerStream)
 }
 
-func (p *GeminiProvider) getChatRequest(request *types.ChatCompletionRequest) (*http.Request, *types.OpenAIErrorWithStatusCode) {
+func (p *GeminiProvider) getChatRequest(geminiRequest *GeminiChatRequest) (*http.Request, *types.OpenAIErrorWithStatusCode) {
 	url := "generateContent"
-	if request.Stream {
+	if geminiRequest.Stream {
 		url = "streamGenerateContent?alt=sse"
 	}
 	// 获取请求地址
-	fullRequestURL := p.GetFullRequestURL(url, request.Model)
+	fullRequestURL := p.GetFullRequestURL(url, geminiRequest.Model)
 
 	// 获取请求头
 	headers := p.GetRequestHeaders()
-	if request.Stream {
+	if geminiRequest.Stream {
 		headers["Accept"] = "text/event-stream"
-	}
-
-	geminiRequest, errWithCode := ConvertFromChatOpenai(request)
-	if errWithCode != nil {
-		return nil, errWithCode
 	}
 
 	p.pluginHandle(geminiRequest)
@@ -114,6 +201,10 @@ func ConvertFromChatOpenai(request *types.ChatCompletionRequest) (*GeminiChatReq
 				Category:  "HARM_CATEGORY_DANGEROUS_CONTENT",
 				Threshold: "BLOCK_NONE",
 			},
+			{
+				Category:  "HARM_CATEGORY_CIVIC_INTEGRITY",
+				Threshold: "BLOCK_NONE",
+			},
 		},
 		GenerationConfig: GeminiChatGenerationConfig{
 			Temperature:     request.Temperature,
@@ -127,31 +218,93 @@ func ConvertFromChatOpenai(request *types.ChatCompletionRequest) (*GeminiChatReq
 	if functions != nil {
 		var geminiChatTools GeminiChatTools
 		for _, function := range functions {
+			if params, ok := function.Parameters.(map[string]interface{}); ok {
+				if properties, ok := params["properties"].(map[string]interface{}); ok && len(properties) == 0 {
+					function.Parameters = nil
+				}
+			}
+
 			geminiChatTools.FunctionDeclarations = append(geminiChatTools.FunctionDeclarations, *function)
 		}
 		geminiRequest.Tools = append(geminiRequest.Tools, geminiChatTools)
 	}
 
-	geminiContent, err := OpenAIToGeminiChatContent(request.Messages)
+	geminiContent, systemContent, err := OpenAIToGeminiChatContent(request.Messages)
 	if err != nil {
 		return nil, err
 	}
 
+	if systemContent != "" {
+		geminiRequest.SystemInstruction = &GeminiChatContent{
+			Parts: []GeminiPart{
+				{Text: systemContent},
+			},
+		}
+	}
+
 	geminiRequest.Contents = geminiContent
+	geminiRequest.Stream = request.Stream
+	geminiRequest.Model = request.Model
+
+	if request.ResponseFormat != nil && (request.ResponseFormat.Type == "json_schema" || request.ResponseFormat.Type == "json_object") {
+		geminiRequest.GenerationConfig.ResponseMimeType = "application/json"
+
+		if request.ResponseFormat.JsonSchema != nil && request.ResponseFormat.JsonSchema.Schema != nil {
+			cleanedSchema := removeAdditionalProperties(request.ResponseFormat.JsonSchema.Schema)
+			geminiRequest.GenerationConfig.ResponseSchema = cleanedSchema
+		}
+	}
 
 	return &geminiRequest, nil
 }
 
-func ConvertToChatOpenai(provider base.ProviderInterface, response *GeminiChatResponse, request *types.ChatCompletionRequest) (openaiResponse *types.ChatCompletionResponse, errWithCode *types.OpenAIErrorWithStatusCode) {
-	aiError := errorHandle(&response.GeminiErrorResponse)
-	if aiError != nil {
-		errWithCode = &types.OpenAIErrorWithStatusCode{
-			OpenAIError: *aiError,
-			StatusCode:  http.StatusBadRequest,
-		}
-		return
+func removeAdditionalProperties(schema interface{}) interface{} {
+	return removeAdditionalPropertiesWithDepth(schema, 0)
+}
+
+func removeAdditionalPropertiesWithDepth(schema interface{}, depth int) interface{} {
+	if depth >= 5 {
+		return schema
 	}
 
+	v, ok := schema.(map[string]interface{})
+	if !ok || len(v) == 0 {
+		return schema
+	}
+
+	// 如果type不为object和array，则直接返回
+	if typeVal, exists := v["type"]; !exists || (typeVal != "object" && typeVal != "array") {
+		return schema
+	}
+
+	delete(v, "title")
+
+	switch v["type"] {
+	case "object":
+		delete(v, "additionalProperties")
+		// 处理 properties
+		if properties, ok := v["properties"].(map[string]interface{}); ok {
+			for key, value := range properties {
+				properties[key] = removeAdditionalPropertiesWithDepth(value, depth+1)
+			}
+		}
+		for _, field := range []string{"allOf", "anyOf", "oneOf"} {
+			if nested, ok := v[field].([]interface{}); ok {
+				for i, item := range nested {
+					nested[i] = removeAdditionalPropertiesWithDepth(item, depth+1)
+				}
+			}
+		}
+	case "array":
+		if items, ok := v["items"].(map[string]interface{}); ok {
+			v["items"] = removeAdditionalPropertiesWithDepth(items, depth+1)
+		}
+	}
+
+	return v
+}
+
+func ConvertToChatOpenai(provider base.ProviderInterface, response *GeminiChatResponse, request *types.ChatCompletionRequest) (openaiResponse *types.ChatCompletionResponse, errWithCode *types.OpenAIErrorWithStatusCode) {
 	openaiResponse = &types.ChatCompletionResponse{
 		ID:      fmt.Sprintf("chatcmpl-%s", utils.GetUUID()),
 		Object:  "chat.completion",
@@ -188,7 +341,7 @@ func (h *GeminiStreamHandler) HandlerStream(rawLine *[]byte, dataChan chan strin
 		return
 	}
 
-	aiError := errorHandle(&geminiResponse.GeminiErrorResponse)
+	aiError := errorHandle(&geminiResponse.GeminiErrorResponse, h.key)
 	if aiError != nil {
 		errChan <- aiError
 		return
@@ -209,7 +362,12 @@ func (h *GeminiStreamHandler) convertToOpenaiStream(geminiResponse *GeminiChatRe
 
 	choices := make([]types.ChatCompletionStreamChoice, 0, len(geminiResponse.Candidates))
 
+	isStop := false
 	for _, candidate := range geminiResponse.Candidates {
+		if candidate.FinishReason != nil && *candidate.FinishReason == "STOP" {
+			isStop = true
+			candidate.FinishReason = nil
+		}
 		choices = append(choices, candidate.ToOpenAIStreamChoice(h.Request))
 	}
 
@@ -227,8 +385,21 @@ func (h *GeminiStreamHandler) convertToOpenaiStream(geminiResponse *GeminiChatRe
 		dataChan <- string(responseBody)
 	}
 
+	if isStop {
+		streamResponse.Choices = []types.ChatCompletionStreamChoice{
+			{
+				FinishReason: types.FinishReasonStop,
+				Delta: types.ChatCompletionStreamChoiceDelta{
+					Role: types.ChatMessageRoleAssistant,
+				},
+			},
+		}
+		responseBody, _ := json.Marshal(streamResponse)
+		dataChan <- string(responseBody)
+	}
+
 	// 和ExecutableCode的tokens共用，所以跳过
-	if geminiResponse.UsageMetadata == nil || geminiResponse.Candidates[0].Content.Parts[0].CodeExecutionResult != nil {
+	if geminiResponse.UsageMetadata == nil || len(geminiResponse.Candidates) == 0 || geminiResponse.Candidates[0].Content.Parts[0].CodeExecutionResult != nil {
 		return
 	}
 
@@ -303,20 +474,77 @@ func convertOpenAIUsage(modelName string, geminiUsage *GeminiUsageMetadata) type
 }
 
 func (p *GeminiProvider) pluginHandle(request *GeminiChatRequest) {
+	if !p.UseCodeExecution {
+		return
+	}
+
+	if len(request.Tools) > 0 {
+		return
+	}
+
 	if p.Channel.Plugin == nil {
 		return
 	}
 
-	plugin := p.Channel.Plugin.Data()
+	request.Tools = append(request.Tools, GeminiChatTools{
+		CodeExecution: &GeminiCodeExecution{},
+	})
 
-	if pWeb, ok := plugin["code_execution"]; ok {
-		if len(request.Tools) > 0 {
+}
+
+func (h *OpenAIStreamHandler) HandlerChatStream(rawLine *[]byte, dataChan chan string, errChan chan error) {
+	// 如果rawLine 前缀不为data:，则直接返回
+	if !strings.HasPrefix(string(*rawLine), "data:") {
+		*rawLine = nil
+		return
+	}
+
+	// 去除前缀
+	*rawLine = (*rawLine)[5:]
+	*rawLine = bytes.TrimSpace(*rawLine)
+
+	// 如果等于 DONE 则结束
+	if string(*rawLine) == "[DONE]" {
+		errChan <- io.EOF
+		*rawLine = requester.StreamClosed
+		return
+	}
+
+	var openaiResponse types.ChatCompletionStreamResponse
+	var response GeminiOpenaiChatStreamResponse
+	err := json.Unmarshal(*rawLine, &response)
+	if err != nil {
+		errChan <- common.ErrorToOpenAIError(err)
+		return
+	}
+
+	openaiResponse = response.ChatCompletionStreamResponse
+
+	if response.Usage != nil {
+		if response.Usage.CompletionTokens > 0 {
+			openaiResponse.Usage = &types.Usage{
+				PromptTokens:     response.Usage.PromptTokens,
+				CompletionTokens: response.Usage.CompletionTokens,
+				TotalTokens:      response.Usage.TotalTokens,
+			}
+
+			*h.Usage = *openaiResponse.Usage
+		}
+
+		if len(response.Choices) == 0 {
+			*rawLine = nil
 			return
 		}
-		if enable, ok := pWeb["enable"].(bool); ok && enable {
-			request.Tools = append(request.Tools, GeminiChatTools{
-				CodeExecution: &GeminiCodeExecution{},
-			})
+	} else {
+		if h.Usage.TotalTokens == 0 {
+			h.Usage.TotalTokens = h.Usage.PromptTokens
 		}
+		countTokenText := common.CountTokenText(openaiResponse.GetResponseText(), h.ModelName)
+		h.Usage.CompletionTokens += countTokenText
+		h.Usage.TotalTokens += countTokenText
 	}
+
+	// 转换字符串
+	responseBody, _ := json.Marshal(openaiResponse)
+	dataChan <- string(responseBody)
 }
